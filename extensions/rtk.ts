@@ -10,8 +10,8 @@
 //   1           No RTK equivalent → pass through unchanged
 //   3 + stdout  Rewrite (advisory) → mutate command
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
-import { isToolCallEventType } from "@earendil-works/pi-coding-agent"
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent"
+import { isToolCallEventType } from "@mariozechner/pi-coding-agent"
 
 const REWRITE_TIMEOUT_MS = 2_000
 const MIN_SUPPORTED_RTK_MINOR = 23

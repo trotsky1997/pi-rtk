@@ -7,7 +7,7 @@ Two layers:
 1. **Auto-rewrite** (`extensions/rtk.ts`) — intercepts `bash` and `powershell` tool calls and delegates to `rtk rewrite`, so commands like `git status` / `pytest` run through `rtk` automatically. No prompt engineering needed.
 2. **Always-on instructions** (`extensions/rtk-instructions.ts`) — injects [`RTK.md`](./RTK.md) into the system prompt every turn via `before_agent_start`, acting as an attached system prompt / AGENTS.md. Survives compaction (lives in system prompt, not messages).
 3. **Output buffering** (`extensions/rtk-buffer.ts`) — on `tool_result` for `bash`/`powershell`, if output exceeds a threshold it is written to a temp file and the inline content is replaced with a compact pointer telling the agent to `rg`/`read` the file instead of burning context on a huge dump.
-4. **Tool overrides** (`extensions/rtk-grep.ts`) — on `tool_result` for the built-in `grep`/`find`/`ls` tools, re-runs the same query through `rtk rg`/`rtk find`/`rtk ls` and replaces the inline content with rtk's compact output (per-file grouping, line truncation, short paths, result caps).
+4. **Tool overrides** (`extensions/rtk-grep.ts`) — on `tool_result` for the built-in `grep`/`find`/`ls`/`read` tools, re-runs the same query through `rtk rg`/`rtk find`/`rtk ls`/`rtk read` and replaces the inline content with rtk's compact output (per-file grouping, line truncation, short paths, result caps, comment/whitespace filtering).
 
 ## Install
 
@@ -36,7 +36,7 @@ Requires the `rtk` binary (≥ 0.23.0) in `PATH`. Get it from the [RTK repo](htt
 | `extensions/rtk.ts` | Upstream-faithful auto-rewrite hook for bash + powershell (from `rtk-ai/rtk`, `develop/hooks/pi/rtk.ts`) |
 | `extensions/rtk-instructions.ts` | Injects `RTK.md` into the system prompt each turn |
 | `extensions/rtk-buffer.ts` | Buffers large bash/powershell outputs to a temp file, replaces inline content with an `rg`/`read` pointer |
-| `extensions/rtk-grep.ts` | Overrides built-in `grep`/`find`/`ls` tools with `rtk rg`/`rtk find`/`rtk ls` |
+| `extensions/rtk-grep.ts` | Overrides built-in `grep`/`find`/`ls`/`read` tools with `rtk rg`/`rtk find`/`rtk ls`/`rtk read` |
 | `RTK.md` | Canonical instruction content (edit here, one source of truth) |
 | `package.json` | pi package manifest |
 
@@ -74,6 +74,7 @@ The `rtk-grep.ts` extension overrides pi's built-in `grep`, `find`, and `ls` too
 | `RTK_GREP_OVERRIDE_DISABLED` | unset | Set `1` to disable grep override |
 | `RTK_FIND_OVERRIDE_DISABLED` | unset | Set `1` to disable find override |
 | `RTK_LS_OVERRIDE_DISABLED` | unset | Set `1` to disable ls override |
+| `RTK_READ_OVERRIDE_DISABLED` | unset | Set `1` to disable read override |
 
 Behavior:
 - Fires on `tool_result` for `grep`, `find`, and `ls` (built-in tools).
@@ -81,6 +82,7 @@ Behavior:
 - `grep` → `rtk rg` (ripgrep native; `rtk grep` would use system grep which rejects `--glob`/`-t`).
 - `find` → `rtk find` (native find with compact tree output).
 - `ls` → `rtk ls -la` (compact listing with short paths).
+- `read` → `rtk read` (full-file reads only; targeted reads with `offset` are skipped to preserve exact line numbers for edit anchors; image reads skipped).
 - Skips error results; fail open on any error.
 
 ## License

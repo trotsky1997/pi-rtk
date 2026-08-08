@@ -1,8 +1,9 @@
-// RTK Pi extension — overrides pi's built-in `grep`, `find`, and `ls` tools to
-// route through `rtk rg` / `rtk find` / `rtk ls` for compact, token-optimized
-// output (per-file grouping, line truncation, result caps, short paths).
+// RTK Pi extension — overrides pi's built-in `grep`, `find`, `ls`, and `read`
+// tools to route through `rtk rg` / `rtk find` / `rtk ls` / `rtk read` for
+// compact, token-optimized output (per-file grouping, line truncation, result
+// caps, short paths, comment/whitespace filtering).
 //
-// Each built-in tool runs its own engine (ripgrep / fd / readdir). This
+// Each built-in tool runs its own engine (ripgrep / fd / readdir / cat). This
 // extension intercepts the tool_result, re-runs the same query through the
 // matching rtk subcommand, and replaces the inline content with rtk's
 // compacted output.
@@ -11,6 +12,7 @@
 //   RTK_GREP_OVERRIDE_DISABLED=1
 //   RTK_FIND_OVERRIDE_DISABLED=1
 //   RTK_LS_OVERRIDE_DISABLED=1
+//   RTK_READ_OVERRIDE_DISABLED=1
 // Or all: RTK_OVERRIDE_DISABLED=1
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent"
@@ -35,6 +37,12 @@ interface FindInput {
 
 interface LsInput {
   path?: string
+  limit?: number
+}
+
+interface ReadInput {
+  path: string
+  offset?: number
   limit?: number
 }
 
@@ -74,6 +82,22 @@ function buildRtkLsArgs(input: LsInput): string[] {
   return args
 }
 
+// Build `rtk read` args from a pi read input. Only used when no offset is set
+// (full-file reads); targeted reads with offset need exact lines for edit
+// anchors and are left to the native tool.
+function buildRtkReadArgs(input: ReadInput): string[] | null {
+  // offset = targeted read (edit anchors, line-range inspection); rtk read's
+  // filtering would shift line numbers and drop anchors — skip.
+  if (typeof input.offset === "number" && input.offset > 0) return null
+  if (!input.path || typeof input.path !== "string") return null
+  const args: string[] = ["read"]
+  if (typeof input.limit === "number" && input.limit > 0) {
+    args.push("-m", String(input.limit))
+  }
+  args.push(input.path)
+  return args
+}
+
 export default async function (pi: ExtensionAPI) {
   const anyOverride = process.env.RTK_OVERRIDE_DISABLED !== "1"
   if (!anyOverride) return
@@ -81,7 +105,8 @@ export default async function (pi: ExtensionAPI) {
   const doGrep = process.env.RTK_GREP_OVERRIDE_DISABLED !== "1"
   const doFind = process.env.RTK_FIND_OVERRIDE_DISABLED !== "1"
   const doLs = process.env.RTK_LS_OVERRIDE_DISABLED !== "1"
-  if (!doGrep && !doFind && !doLs) return
+  const doRead = process.env.RTK_READ_OVERRIDE_DISABLED !== "1"
+  if (!doGrep && !doFind && !doLs && !doRead) return
 
   // Probe rtk at load; disable if missing.
   const ver = await pi.exec("rtk", ["--version"], { timeout: 2_000 })
@@ -110,6 +135,13 @@ export default async function (pi: ExtensionAPI) {
       } else if (doLs && name === "ls") {
         const input = event.input as LsInput
         rtkArgs = buildRtkLsArgs(input)
+      } else if (doRead && name === "read") {
+        const input = event.input as ReadInput
+        // Skip image reads: pi returns ImageContent for images, rtk read is text-only.
+        const hasImage = Array.isArray(event.content) &&
+          event.content.some((b: unknown) => (b as { type?: string })?.type === "image")
+        if (hasImage) return
+        rtkArgs = buildRtkReadArgs(input)
       }
 
       if (!rtkArgs) return

@@ -105,7 +105,11 @@ export default async function (pi: ExtensionAPI) {
   const doGrep = process.env.RTK_GREP_OVERRIDE_DISABLED !== "1"
   const doFind = process.env.RTK_FIND_OVERRIDE_DISABLED !== "1"
   const doLs = process.env.RTK_LS_OVERRIDE_DISABLED !== "1"
-  const doRead = process.env.RTK_READ_OVERRIDE_DISABLED !== "1"
+  // read is NOT overridden: rtk read does not compact, and overriding here runs
+  // AFTER rtk-buffer (fixed load order), clobbering its buffer pointer with the
+  // full file. read buffering is owned by rtk-buffer. Keep this off unless
+  // RTK_READ_OVERRIDE_FORCE=1 explicitly opts in.
+  const doRead = process.env.RTK_READ_OVERRIDE_FORCE === "1"
   if (!doGrep && !doFind && !doLs && !doRead) return
 
   // Probe rtk at load; disable if missing.

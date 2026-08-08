@@ -85,12 +85,16 @@ function buildRtkLsArgs(input: LsInput): string[] {
 // Build `rtk read` args from a pi read input. Only used when no offset is set
 // (full-file reads); targeted reads with offset need exact lines for edit
 // anchors and are left to the native tool.
+//
+// Uses `-l aggressive` (signatures only, function bodies → `// ...`): for full-file
+// reads this yields ~71% byte reduction on code files (rtk read default `none`
+// filters nothing). Edit anchors are safe because offset reads are skipped above.
 function buildRtkReadArgs(input: ReadInput): string[] | null {
   // offset = targeted read (edit anchors, line-range inspection); rtk read's
   // filtering would shift line numbers and drop anchors — skip.
   if (typeof input.offset === "number" && input.offset > 0) return null
   if (!input.path || typeof input.path !== "string") return null
-  const args: string[] = ["read"]
+  const args: string[] = ["read", "-l", "aggressive"]
   if (typeof input.limit === "number" && input.limit > 0) {
     args.push("-m", String(input.limit))
   }
@@ -105,11 +109,11 @@ export default async function (pi: ExtensionAPI) {
   const doGrep = process.env.RTK_GREP_OVERRIDE_DISABLED !== "1"
   const doFind = process.env.RTK_FIND_OVERRIDE_DISABLED !== "1"
   const doLs = process.env.RTK_LS_OVERRIDE_DISABLED !== "1"
-  // read is NOT overridden: rtk read does not compact, and overriding here runs
-  // AFTER rtk-buffer (fixed load order), clobbering its buffer pointer with the
-  // full file. read buffering is owned by rtk-buffer. Keep this off unless
-  // RTK_READ_OVERRIDE_FORCE=1 explicitly opts in.
-  const doRead = process.env.RTK_READ_OVERRIDE_FORCE === "1"
+  // read IS overridden with `rtk read -l aggressive` (signatures only, ~71% byte
+  // reduction on code). Runs before rtk-buffer in the load order, so its compact
+  // output usually stays under the buffer threshold — no clobbering. offset reads
+  // (edit anchors) are skipped in buildRtkReadArgs. Disable: RTK_READ_OVERRIDE_DISABLED=1.
+  const doRead = process.env.RTK_READ_OVERRIDE_DISABLED !== "1"
   if (!doGrep && !doFind && !doLs && !doRead) return
 
   // Probe rtk at load; disable if missing.

@@ -83,7 +83,7 @@ Behavior:
 - `grep` → `rtk rg` (ripgrep native; `rtk grep` would use system grep which rejects `--glob`/`-t`).
 - `find` → `rtk find` (native find with compact tree output).
 - `ls` → `rtk ls -la` (compact listing with short paths).
-- `read` → `rtk read` (full-file reads only; targeted reads with `offset` are skipped to preserve exact line numbers for edit anchors; image reads skipped).
+- `read` → `rtk read -l aggressive` (signatures only, ~71% byte reduction on code; full-file reads only — targeted reads with `offset` are skipped to preserve exact line numbers for edit anchors; image reads skipped).
 - Skips error results; fail open on any error.
 
 ## License

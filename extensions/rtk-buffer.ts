@@ -13,8 +13,8 @@ import { writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 
-const DEFAULT_MAX_CHARS = 20_000
-const DEFAULT_MAX_LINES = 500
+const DEFAULT_MAX_CHARS = 5_000
+const DEFAULT_MAX_LINES = 50
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name]

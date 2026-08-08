@@ -51,8 +51,8 @@ The `rtk-buffer.ts` extension buffers large tool outputs to a temp file when the
 
 | Env var | Default | Effect |
 |---|---|---|
-| `RTK_BUFFER_MAX_CHARS` | `20000` | Char limit; either limit trips buffering |
-| `RTK_BUFFER_MAX_LINES` | `500` | Line limit; either limit trips buffering |
+| `RTK_BUFFER_MAX_CHARS` | `5000` | Char limit; either limit trips buffering |
+| `RTK_BUFFER_MAX_LINES` | `50` | Line limit; either limit trips buffering |
 | `RTK_BUFFER_DISABLED` | unset | Set `1` to disable |
 
 Behavior:

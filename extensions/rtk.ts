@@ -23,6 +23,17 @@ function parseSemver(raw: string): [number, number, number] | null {
   return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)]
 }
 
+// Strip leading env assignments (FOO=1 BAR=2 cmd -> { envPrefix, command }) so
+// `A=1 rtk status` is detected as already-rtk. Mirrors shell-env-prefix.ts
+// from MasuRii/pi-rtk-optimizer, keeping rtk rewrite as the source of truth.
+function splitLeadingEnvAssignments(input: string): { envPrefix: string; command: string } {
+  // Match one or more leading VAR=value pairs (value may be double/single
+  // quoted or unquoted). Captures all pairs as group 1.
+  const envPattern = /^((?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s]+)\s+)*)/
+  const envPrefix = input.match(envPattern)?.[1] ?? ""
+  return { envPrefix, command: input.slice(envPrefix.length) }
+}
+
 // Calls `rtk rewrite`; returns the rewritten command or null (pass through).
 async function rewriteCommand(
   pi: ExtensionAPI,
@@ -67,9 +78,13 @@ export default async function (pi: ExtensionAPI) {
       const cmd = (event.input as { command?: unknown }).command
       if (typeof cmd !== "string" || cmd.trim() === "") return
 
-      // Skip if rtk already appears anywhere as a token (handles multi-line, &&, ;, |
-      // etc.) so e.g. `git status && rtk pytest` is left alone.
-      if (/\brtk\b/.test(cmd)) return
+      // Only skip when the command (after stripping leading env assignments) is
+      // already an rtk command at the head. This lets compound commands like
+      // `git status && rtk pytest` still be rewritten (rtk rewrites the first
+      // segment too) while avoiding double-rewriting an already-prefixed rtk
+      // command like `FOO=1 rtk status`.
+      const { command: headCmd } = splitLeadingEnvAssignments(cmd.trimStart())
+      if (headCmd === "rtk" || headCmd.startsWith("rtk ")) return
       if (process.env.RTK_DISABLED === "1") return
 
       // Delegate to RTK.

@@ -49,6 +49,62 @@ async function rewriteCommand(
   return result.stdout.trim() || null
 }
 
+// Split a command on top-level `|` separators (shell pipeline), respecting
+// quotes and escapes. Returns null if there are no top-level pipes or if the
+// command is not a simple pipeline (e.g. contains `&&`, `||`, `;`, newlines).
+// rtk rewrite only handles 2-segment pipelines natively; 3+ segments get
+// exit 1. This splitter lets us fall back to per-segment rewrite.
+function splitTopLevelPipes(command: string): string[] | null {
+  const segments: string[] = []
+  let segmentStart = 0
+  let quote: string | null = null
+  let escaped = false
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]
+
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (ch === "\\") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      continue
+    }
+    // `|` but not `||` (logical-or) and not `>|` or `|&` (we only split bare `|`).
+    if (ch === "|" && command[i + 1] !== "|" && command[i - 1] !== "|") {
+      // Bail on `|&` and `>|` — not a simple pipeline we want to split.
+      if (command[i + 1] === "&" || command[i - 1] === ">") return null
+      segments.push(command.slice(segmentStart, i))
+      segmentStart = i + 1
+    }
+  }
+  segments.push(command.slice(segmentStart))
+
+  // Only treat as a multi-segment pipeline if we actually split.
+  if (segments.length < 2) return null
+  // Bail if any segment contains other compound operators that rtk should
+  // handle as part of its own parsing (avoid breaking &&/||/;/newline).
+  const joined = segments.join("")
+  if (/(&&|\|\||;|\n)/.test(joinedWithoutQuotes(joined))) return null
+  return segments
+}
+
+// Strip quoted regions from a string for a cheap compound-operator check.
+// We only use this to *avoid* splitting pipelines that mix `|` with `&&`/`||`/`;`/newline;
+// false negatives just mean we don't split, which is safe.
+function joinedWithoutQuotes(s: string): string {
+  return s.replace(/"(?:\\.|[^"\\])*"|'(?:[^']|\\.)*'/g, "")
+}
+
 export default async function (pi: ExtensionAPI) {
   // Probe rtk version at load time; disables extension if missing or too old.
   const ver = await pi.exec("rtk", ["--version"], { timeout: REWRITE_TIMEOUT_MS })
@@ -88,7 +144,29 @@ export default async function (pi: ExtensionAPI) {
       if (process.env.RTK_DISABLED === "1") return
 
       // Delegate to RTK.
-      const rewritten = await rewriteCommand(pi, cmd, ctx.signal)
+      let rewritten = await rewriteCommand(pi, cmd, ctx.signal)
+
+      // Fallback: rtk rewrite only handles 2-segment pipelines natively. For
+      // 3+ segment pipelines it exits 1. Split on top-level `|` (quote-aware),
+      // rewrite each segment, and rejoin. Only applied when the split succeeds
+      // and at least one segment actually changed.
+      if (!rewritten) {
+        const segments = splitTopLevelPipes(cmd)
+        if (segments) {
+          const rewrittenSegs: string[] = []
+          let changed = false
+          for (const seg of segments) {
+            const rw = await rewriteCommand(pi, seg.trim(), ctx.signal)
+            const out = rw ?? seg.trim()
+            if (rw && rw !== seg.trim()) changed = true
+            rewrittenSegs.push(out)
+          }
+          if (changed) {
+            rewritten = rewrittenSegs.join(" | ")
+          }
+        }
+      }
+
       if (rewritten && rewritten !== cmd) {
         event.input.command = rewritten
       }

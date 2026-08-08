@@ -2,7 +2,7 @@
 // the inline content with a compact head/tail pointer, so the agent reaches
 // for rg/grep instead of burning context on a huge dump.
 //
-// Applies to: bash, powershell, grep, find, ls, read, web_fetch tool results.
+// Applies to: all tool results by default, except those in NO_BUFFER.
 // (Runs after rtk-grep.ts overrides, so it sees rtk's compacted output and
 // only buffers if that still exceeds the threshold.)
 //
@@ -22,7 +22,25 @@ import { tmpdir } from "node:os"
 const DEFAULT_MAX_CHARS = 5_000
 const DEFAULT_MAX_LINES = 50
 
-const BUFFERED_TOOLS = new Set(["bash", "powershell", "grep", "find", "ls", "read", "web_fetch"])
+// Tools whose results must NOT be buffered (truncation breaks semantics or
+// the output is always small/structured). Everything else is buffered when
+// it exceeds the threshold — new tools get protection by default.
+// Override: RTK_BUFFER_NO_BUFFER=tool1,tool2 to add; RTK_BUFFER_FORCE=<tool>
+// to buffer a listed tool anyway.
+const NO_BUFFER = new Set([
+  "edit", "write", "apply_patch", // diffs/confirmations — exact content needed
+  "lsp", // structured diagnostics — truncation breaks navigation
+  "jq", "yq", "mq", // structured JSON/markdown — truncation breaks parse
+  "todo", // small lists
+  "prefix_cache_status", // small status object
+  "debug", // structured stack/variables
+  "clipboard", // small
+  "mem_get", "mem_put", "mem_del", // small
+  "openspec_status", "openspec_instructions", "openspec_validate", "openspec_archive", "openspec_tasks",
+  "ocr", // image layout — already compacted
+  "computer_use", "browser_use", // handled by TK filter layer
+  "tk", // TK is itself a filter, double-buffering is noise
+])
 
 // Buffer files live in tmpdir and match `rtk-out-<stamp>-<rand>.txt`.
 const BUFFER_FILE_RE = /rtk-out-\d+-[A-Za-z0-9]+\.txt$/
@@ -64,6 +82,14 @@ export default function (pi: ExtensionAPI) {
 
   const maxChars = envInt("RTK_BUFFER_MAX_CHARS", DEFAULT_MAX_CHARS)
   const maxLines = envInt("RTK_BUFFER_MAX_LINES", DEFAULT_MAX_LINES)
+
+  // Build the effective no-buffer set: start from defaults, add tools from
+  // RTK_BUFFER_NO_BUFFER=tool1,tool2, remove any in RTK_BUFFER_FORCE=tool3.
+  const noBuffer = new Set(NO_BUFFER)
+  const add = process.env.RTK_BUFFER_NO_BUFFER
+  if (add) for (const t of add.split(",").map(s => s.trim().toLowerCase()).filter(Boolean)) noBuffer.add(t)
+  const force = process.env.RTK_BUFFER_FORCE
+  if (force) for (const t of force.split(",").map(s => s.trim().toLowerCase()).filter(Boolean)) noBuffer.delete(t)
 
   // True if `target` names a buffer file (a path under tmpdir matching the
   // rtk-out pattern). Used to block read/cat so the agent must rg/grep it.
@@ -158,7 +184,7 @@ export default function (pi: ExtensionAPI) {
     try {
       const name = (event as { toolName?: string }).toolName ?? ""
       appendFileSync(join(tmpdir(), "rtk-ver.log"), `[buffer v2] name=${name} ts=${Date.now()}\n`)
-      if (!BUFFERED_TOOLS.has(name)) return
+      if (noBuffer.has(name)) return
       if (event.isError) return
 
       // Skip image-only reads (no text to buffer).

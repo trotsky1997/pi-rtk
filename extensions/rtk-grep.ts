@@ -15,7 +15,7 @@
 //   RTK_READ_OVERRIDE_DISABLED=1
 // Or all: RTK_OVERRIDE_DISABLED=1
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent"
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 
 const SEARCH_TIMEOUT_MS = 15_000
 

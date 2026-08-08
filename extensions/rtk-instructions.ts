@@ -3,7 +3,7 @@
 //
 // Content lives in the sibling RTK.md so it stays editable in one place.
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent"
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"

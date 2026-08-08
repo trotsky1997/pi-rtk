@@ -10,8 +10,8 @@
 // RTK_BUFFER_MAX_LINES (default 50). Either limit trips the buffer.
 // Disable: RTK_BUFFER_DISABLED=1.
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent"
-import { isBashToolResult } from "@mariozechner/pi-coding-agent"
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
+import { isBashToolResult } from "@earendil-works/pi-coding-agent"
 import { writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"

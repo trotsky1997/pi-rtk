@@ -1,10 +1,13 @@
 // RTK Pi extension — buffers large tool outputs to a temp file and replaces
-// the inline content with a compact pointer, so the agent reaches for rg/read
-// instead of burning context on a huge dump.
+// the inline content with a compact head/tail pointer, so the agent reaches
+// for rg/grep instead of burning context on a huge dump.
 //
-// Applies to: bash, powershell, grep, find, ls, read tool results.
+// Applies to: bash, powershell, grep, find, ls, read, web_fetch tool results.
 // (Runs after rtk-grep.ts overrides, so it sees rtk's compacted output and
 // only buffers if that still exceeds the threshold.)
+//
+// Buffer files are read-only-via-search: read/cat is blocked in tool_call,
+// forcing rg/grep re-retrieval so the full dump never re-enters context.
 //
 // Thresholds (override via env): RTK_BUFFER_MAX_CHARS (default 5000),
 // RTK_BUFFER_MAX_LINES (default 50). Either limit trips the buffer.
@@ -19,7 +22,10 @@ import { tmpdir } from "node:os"
 const DEFAULT_MAX_CHARS = 5_000
 const DEFAULT_MAX_LINES = 50
 
-const BUFFERED_TOOLS = new Set(["bash", "powershell", "grep", "find", "ls", "read"])
+const BUFFERED_TOOLS = new Set(["bash", "powershell", "grep", "find", "ls", "read", "web_fetch"])
+
+// Buffer files live in tmpdir and match `rtk-out-<stamp>-<rand>.txt`.
+const BUFFER_FILE_RE = /rtk-out-\d+-[A-Za-z0-9]+\.txt$/
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name]
@@ -46,6 +52,8 @@ function describeInput(toolName: string, input: Record<string, unknown>): string
   if (typeof cmd === "string") return cmd.slice(0, 120)
   const path = input.path
   if (typeof path === "string") return `${toolName} ${path}`.slice(0, 120)
+  const url = input.url
+  if (typeof url === "string") return `${toolName} ${url}`.slice(0, 120)
   const pattern = input.pattern
   if (typeof pattern === "string") return `${toolName} ${pattern}`.slice(0, 120)
   return toolName
@@ -56,6 +64,72 @@ export default function (pi: ExtensionAPI) {
 
   const maxChars = envInt("RTK_BUFFER_MAX_CHARS", DEFAULT_MAX_CHARS)
   const maxLines = envInt("RTK_BUFFER_MAX_LINES", DEFAULT_MAX_LINES)
+
+  // True if `target` names a buffer file (a path under tmpdir matching the
+  // rtk-out pattern). Used to block read/cat so the agent must rg/grep it.
+  function isBufferPath(target: string): boolean {
+    if (!target) return false
+    const norm = target.replace(/\\/g, "/")
+    // Must live in tmpdir (or be a bare filename, which resolves there).
+    const tmp = tmpdir().replace(/\\/g, "/")
+    const inTmp = norm.startsWith(tmp + "/") || norm.includes("/" + "rtk-out-") || /^rtk-out-/.test(norm)
+    return inTmp && BUFFER_FILE_RE.test(norm)
+  }
+
+  // Detect a read/cat/type/Get-Content of a buffer file inside a shell
+  // command. Returns the matched buffer path, or null. Quote- and case-aware;
+  // we only need a boolean, but returning the path aids the reason string.
+  function bufferFileInCommand(cmd: string): string | null {
+    // Match rtk-out-<digits>-<alnum>.txt possibly with a path prefix and
+    // surrounding quotes. We look for the filename token directly.
+    const re = /([\w\/.\\-]*rtk-out-\d+-[A-Za-z0-9]+\.txt)/g
+    let m: RegExpExecArray | null
+    while ((m = re.exec(cmd)) !== null) {
+      if (isBufferPath(m[1])) return m[1]
+    }
+    return null
+  }
+
+  // Block read/cat of buffer files in tool_call (before execution).
+  pi.on("tool_call", async (event, ctx) => {
+    try {
+      const name = (event as { toolName?: string }).toolName ?? ""
+
+      // read tool
+      if (name === "read") {
+        const path = (event.input as { path?: unknown }).path
+        if (typeof path === "string" && isBufferPath(path)) {
+          ctx.ui.notify("rtk-buffer: blocked read of buffer file — use rg/grep", "warn")
+          return {
+            block: true,
+            reason:
+              `Buffer file ${path} is read-only-via-search to avoid re-dumping the full output into context. ` +
+              `Use \`rg -n "<pattern>" ${path}\` or \`grep -n "<pattern>" ${path}\` instead.`,
+          }
+        }
+      }
+
+      // bash / powershell: block cat/type/Get-Content/etc. on buffer files.
+      if (name === "bash" || name === "powershell") {
+        const cmd = (event.input as { command?: unknown }).command
+        if (typeof cmd === "string") {
+          const hit = bufferFileInCommand(cmd)
+          if (hit) {
+            ctx.ui.notify("rtk-buffer: blocked cat/read of buffer file — use rg/grep", "warn")
+            return {
+              block: true,
+              reason:
+                `Buffer file ${hit} is read-only-via-search to avoid re-dumping the full output into context. ` +
+                `Use \`rg -n "<pattern>" ${hit}\` or \`grep -n "<pattern>" ${hit}\` instead.`,
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[rtk-buffer] unexpected error in tool_call blocker; passing through", err)
+      return
+    }
+  })
 
   pi.on("tool_result", async (event) => {
     try {
@@ -92,22 +166,32 @@ export default function (pi: ExtensionAPI) {
       const label = describeInput(name, event.input)
       const kept = Math.round((maxChars / Math.max(text.length, 1)) * 100)
 
-      // Preview: first `maxLines` lines (line limit wins so preview row count is
-      // predictable), then hard-cap total to `maxChars` chars as a safety bound.
+      // Preview: head `maxLines/2` + tail `maxLines/2` (sandwiches a truncation
+      // marker so the agent sees the opening and closing of the output without
+      // the middle burning context). Then hard-cap total to `maxChars`.
       const allLines = text.split("\n")
-      const previewLines = allLines.slice(0, maxLines)
-      let preview = previewLines.join("\n")
+      const half = Math.floor(maxLines / 2)
+      let preview: string
+      if (allLines.length <= maxLines) {
+        preview = allLines.join("\n")
+      } else {
+        const head = allLines.slice(0, half)
+        const tail = allLines.slice(allLines.length - half)
+        const omitted = allLines.length - head.length - tail.length
+        preview = head.join("\n") +
+          `\n…[truncated — ${omitted.toLocaleString()} lines omitted — rg/grep the file to inspect]…\n` +
+          tail.join("\n")
+      }
       if (preview.length > maxChars) preview = preview.slice(0, maxChars)
       const truncated = preview.length < text.length
 
       const pointer =
         `Output buffered to \`${file}\` (${text.length.toLocaleString()} chars, ${lines.toLocaleString()} lines).\n` +
         `Source: \`${label}\`\n\n` +
-        `Full output is not in context. To inspect it, read or grep the file instead of re-running the command:\n` +
-        `- search: \`rg -n "<pattern>" ${file}\`\n` +
-        `- read a slice: \`read ${file} offset=1 limit=200\`\n` +
-        `- tail: \`read ${file} offset=${Math.max(1, lines - 200)} limit=200\`\n\n` +
-        `(kept ~${kept}% preview below — truncated)\n\n` +
+        `Full output is not in context. To inspect it, search the file (do NOT read/cat it — that re-dumps the whole thing):\n` +
+        `- \`rg -n "<pattern>" ${file}\`\n` +
+        `- \`grep -n "<pattern>" ${file}\`\n\n` +
+        `(kept ~${kept}% preview below — head/tail only)\n\n` +
         preview +
         (truncated ? "\n…[truncated — see file above]…" : "")
 

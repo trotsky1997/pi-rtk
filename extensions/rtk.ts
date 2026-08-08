@@ -169,6 +169,7 @@ export default async function (pi: ExtensionAPI) {
 
       if (rewritten && rewritten !== cmd) {
         event.input.command = rewritten
+        ctx.ui.notify(`rtk: ${rewritten}`, "info")
       }
     } catch (err) {
       // Fail open: never block execution on an unexpected error.

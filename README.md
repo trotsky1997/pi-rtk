@@ -4,7 +4,7 @@
 
 Two layers:
 
-1. **Auto-rewrite** (`extensions/rtk.ts`) — intercepts `bash` tool calls and delegates to `rtk rewrite`, so commands like `git status` / `pytest` run through `rtk` automatically. No prompt engineering needed.
+1. **Auto-rewrite** (`extensions/rtk.ts`) — intercepts `bash` and `powershell` tool calls and delegates to `rtk rewrite`, so commands like `git status` / `pytest` run through `rtk` automatically. No prompt engineering needed.
 2. **Always-on instructions** (`extensions/rtk-instructions.ts`) — injects [`RTK.md`](./RTK.md) into the system prompt every turn via `before_agent_start`, acting as an attached system prompt / AGENTS.md. Survives compaction (lives in system prompt, not messages).
 
 ## Install
@@ -20,7 +20,7 @@ Requires the `rtk` binary (≥ 0.23.0) in `PATH`. Get it from the [RTK repo](htt
 ## What it does
 
 - `rtk.ts` probes `rtk --version` at load; disables itself if missing or too old (`< 0.23.0`).
-- On every `bash` tool call, runs `rtk rewrite <cmd>`:
+- On every `bash` or `powershell` tool call, runs `rtk rewrite <cmd>`:
   - exit `0` → rewrite found, mutate the command
   - exit `3` → advisory rewrite, mutate
   - exit `1` → no equivalent, pass through unchanged
@@ -31,7 +31,7 @@ Requires the `rtk` binary (≥ 0.23.0) in `PATH`. Get it from the [RTK repo](htt
 
 | File | Purpose |
 |------|---------|
-| `extensions/rtk.ts` | Upstream-faithful auto-rewrite hook (from `rtk-ai/rtk`, `develop/hooks/pi/rtk.ts`) |
+| `extensions/rtk.ts` | Upstream-faithful auto-rewrite hook for bash + powershell (from `rtk-ai/rtk`, `develop/hooks/pi/rtk.ts`) |
 | `extensions/rtk-instructions.ts` | Injects `RTK.md` into the system prompt each turn |
 | `RTK.md` | Canonical instruction content (edit here, one source of truth) |
 | `package.json` | pi package manifest |

@@ -1,4 +1,4 @@
-// RTK Pi extension — rewrites bash commands to use rtk for token savings.
+// RTK Pi extension — rewrites bash/powershell commands to use rtk for token savings.
 // Requires: rtk >= 0.23.0 in PATH.
 //
 // This is a thin delegating extension: all rewrite logic lives in `rtk rewrite`,
@@ -58,11 +58,16 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("tool_call", async (event, ctx) => {
     try {
-      if (!isToolCallEventType("bash", event)) return
+      // Narrow to bash or powershell; both carry input.command as the raw command string.
+      if (
+        !isToolCallEventType("bash", event) &&
+        !isToolCallEventType<"powershell", { command: string }>("powershell", event)
+      ) return
 
-      const cmd = event.input.command
+      const cmd = (event.input as { command?: unknown }).command
       if (typeof cmd !== "string" || cmd.trim() === "") return
 
+      // Skip commands already routed through rtk.
       if (cmd.startsWith("rtk ")) return
       if (process.env.RTK_DISABLED === "1") return
 

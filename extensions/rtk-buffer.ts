@@ -12,7 +12,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { isBashToolResult } from "@earendil-works/pi-coding-agent"
-import { writeFileSync } from "node:fs"
+import { writeFileSync, appendFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 
@@ -60,6 +60,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_result", async (event) => {
     try {
       const name = (event as { toolName?: string }).toolName ?? ""
+      appendFileSync(join(tmpdir(), "rtk-ver.log"), `[buffer v2] name=${name} ts=${Date.now()}\n`)
       if (!BUFFERED_TOOLS.has(name)) return
       if (event.isError) return
 
@@ -91,18 +92,12 @@ export default function (pi: ExtensionAPI) {
       const label = describeInput(name, event.input)
       const kept = Math.round((maxChars / Math.max(text.length, 1)) * 100)
 
-      // Preview: keep first `maxLines` lines, capped to `maxChars` chars so both
-      // thresholds apply to what stays inline (not just what triggers buffering).
+      // Preview: first `maxLines` lines (line limit wins so preview row count is
+      // predictable), then hard-cap total to `maxChars` chars as a safety bound.
       const allLines = text.split("\n")
-      const previewLines: string[] = []
-      let previewLen = 0
-      for (const line of allLines) {
-        if (previewLines.length >= maxLines) break
-        if (previewLen + line.length + 1 > maxChars) break
-        previewLines.push(line)
-        previewLen += line.length + 1
-      }
-      const preview = previewLines.join("\n")
+      const previewLines = allLines.slice(0, maxLines)
+      let preview = previewLines.join("\n")
+      if (preview.length > maxChars) preview = preview.slice(0, maxChars)
       const truncated = preview.length < text.length
 
       const pointer =

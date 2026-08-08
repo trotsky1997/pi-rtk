@@ -91,6 +91,20 @@ export default function (pi: ExtensionAPI) {
       const label = describeInput(name, event.input)
       const kept = Math.round((maxChars / Math.max(text.length, 1)) * 100)
 
+      // Preview: keep first `maxLines` lines, capped to `maxChars` chars so both
+      // thresholds apply to what stays inline (not just what triggers buffering).
+      const allLines = text.split("\n")
+      const previewLines: string[] = []
+      let previewLen = 0
+      for (const line of allLines) {
+        if (previewLines.length >= maxLines) break
+        if (previewLen + line.length + 1 > maxChars) break
+        previewLines.push(line)
+        previewLen += line.length + 1
+      }
+      const preview = previewLines.join("\n")
+      const truncated = preview.length < text.length
+
       const pointer =
         `Output buffered to \`${file}\` (${text.length.toLocaleString()} chars, ${lines.toLocaleString()} lines).\n` +
         `Source: \`${label}\`\n\n` +
@@ -99,8 +113,8 @@ export default function (pi: ExtensionAPI) {
         `- read a slice: \`read ${file} offset=1 limit=200\`\n` +
         `- tail: \`read ${file} offset=${Math.max(1, lines - 200)} limit=200\`\n\n` +
         `(kept ~${kept}% preview below — truncated)\n\n` +
-        text.slice(0, maxChars) +
-        (text.length > maxChars ? "\n…[truncated — see file above]…" : "")
+        preview +
+        (truncated ? "\n…[truncated — see file above]…" : "")
 
       return {
         content: [{ type: "text" as const, text: pointer }],

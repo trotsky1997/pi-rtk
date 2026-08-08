@@ -2,9 +2,12 @@
 // the inline content with a compact pointer, so the agent reaches for rg/read
 // instead of burning context on a huge dump.
 //
-// Applies to: bash and powershell tool results.
-// Thresholds (override via env): RTK_BUFFER_MAX_CHARS (default 20000),
-// RTK_BUFFER_MAX_LINES (default 500). Either limit trips the buffer.
+// Applies to: bash, powershell, grep, find, ls, read tool results.
+// (Runs after rtk-grep.ts overrides, so it sees rtk's compacted output and
+// only buffers if that still exceeds the threshold.)
+//
+// Thresholds (override via env): RTK_BUFFER_MAX_CHARS (default 5000),
+// RTK_BUFFER_MAX_LINES (default 50). Either limit trips the buffer.
 // Disable: RTK_BUFFER_DISABLED=1.
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent"
@@ -15,6 +18,8 @@ import { tmpdir } from "node:os"
 
 const DEFAULT_MAX_CHARS = 5_000
 const DEFAULT_MAX_LINES = 50
+
+const BUFFERED_TOOLS = new Set(["bash", "powershell", "grep", "find", "ls", "read"])
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name]
@@ -35,6 +40,17 @@ function extractText(content: unknown): string {
     .join("\n")
 }
 
+// Build a short, tool-appropriate label for the pointer message.
+function describeInput(toolName: string, input: Record<string, unknown>): string {
+  const cmd = input.command
+  if (typeof cmd === "string") return cmd.slice(0, 120)
+  const path = input.path
+  if (typeof path === "string") return `${toolName} ${path}`.slice(0, 120)
+  const pattern = input.pattern
+  if (typeof pattern === "string") return `${toolName} ${pattern}`.slice(0, 120)
+  return toolName
+}
+
 export default function (pi: ExtensionAPI) {
   if (process.env.RTK_BUFFER_DISABLED === "1") return
 
@@ -43,19 +59,21 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("tool_result", async (event) => {
     try {
-      // bash (built-in) or powershell (custom tool). BashToolResultEvent has
-      // toolName === "bash"; for the custom powershell tool we match by name.
-      const isBash = isBashToolResult(event)
-      const isPwsh = !isBash && (event as { toolName?: string }).toolName === "powershell"
-      if (!isBash && !isPwsh) return
+      const name = (event as { toolName?: string }).toolName ?? ""
+      if (!BUFFERED_TOOLS.has(name)) return
       if (event.isError) return
+
+      // Skip image-only reads (no text to buffer).
+      const hasImage = Array.isArray(event.content) &&
+        event.content.some((b: unknown) => (b as { type?: string })?.type === "image")
+      if (hasImage) return
 
       const text = extractText(event.content)
       if (!text) return
 
       // If the bash tool already truncated and saved a full-output file, its
       // content already references that path — don't double-buffer.
-      if (isBash) {
+      if (isBashToolResult(event)) {
         const details = (event as { details?: { fullOutputPath?: string } }).details
         if (details?.fullOutputPath) return
       }
@@ -70,13 +88,12 @@ export default function (pi: ExtensionAPI) {
       const file = join(tmpdir(), `rtk-out-${stamp}-${rand}.txt`)
       writeFileSync(file, text, "utf8")
 
-      const cmd = (event.input as { command?: unknown }).command
-      const cmdPreview = typeof cmd === "string" ? cmd.slice(0, 120) : "(unknown command)"
+      const label = describeInput(name, event.input)
       const kept = Math.round((maxChars / Math.max(text.length, 1)) * 100)
 
       const pointer =
         `Output buffered to \`${file}\` (${text.length.toLocaleString()} chars, ${lines.toLocaleString()} lines).\n` +
-        `Original command: \`${cmdPreview}\`\n\n` +
+        `Source: \`${label}\`\n\n` +
         `Full output is not in context. To inspect it, read or grep the file instead of re-running the command:\n` +
         `- search: \`rg -n "<pattern>" ${file}\`\n` +
         `- read a slice: \`read ${file} offset=1 limit=200\`\n` +

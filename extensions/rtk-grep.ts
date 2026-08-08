@@ -16,6 +16,8 @@
 // Or all: RTK_OVERRIDE_DISABLED=1
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
+import { homedir } from "node:os"
+import { isAbsolute, resolve as resolvePath } from "node:path"
 
 const SEARCH_TIMEOUT_MS = 15_000
 
@@ -46,8 +48,23 @@ interface ReadInput {
   limit?: number
 }
 
+// Resolve a tool input path the way pi does (resolveToCwd/expandPath): expand
+// `~` and resolve relatives against cwd. rtk runs with shell:false so `~` is
+// not expanded by the shell — we must do it here or rtk rg/find/ls/read gets a
+// literal `~/foo` path it can't open. (pi cwd already matches pi.exec's default
+// cwd, so plain relatives resolve identically; absolute paths pass through.)
+function resolveInputPath(p: string | undefined, cwd: string): string | undefined {
+  if (!p) return undefined
+  let s = p
+  if (s === "~") return homedir()
+  if (s.startsWith("~/")) s = homedir() + s.slice(1) // keep leading /
+  if (s.startsWith("@")) s = s.slice(1) // pi's expandPath strips leading @
+  if (isAbsolute(s)) return s
+  return resolvePath(cwd, s)
+}
+
 // Build `rtk rg` args from a pi grep input.
-function buildRtkRgArgs(input: GrepInput): string[] {
+function buildRtkRgArgs(input: GrepInput, cwd: string): string[] {
   const args: string[] = ["rg"]
   if (input.ignoreCase) args.push("-i")
   if (input.literal) args.push("--fixed-strings")
@@ -60,15 +77,16 @@ function buildRtkRgArgs(input: GrepInput): string[] {
     args.push("--max", String(input.limit))
   }
   args.push("--", input.pattern)
-  if (input.path) args.push(input.path)
+  const p = resolveInputPath(input.path, cwd)
+  if (p) args.push(p)
   return args
 }
 
 // Build `rtk find` args from a pi find input. pi's `pattern` is a glob like
 // '*.ts'; rtk find forwards native find flags, so -name <pattern>.
-function buildRtkFindArgs(input: FindInput): string[] {
+function buildRtkFindArgs(input: FindInput, cwd: string): string[] {
   const args: string[] = ["find"]
-  const searchPath = input.path ?? "."
+  const searchPath = resolveInputPath(input.path, cwd) ?? resolveInputPath(".", cwd)!
   args.push(searchPath)
   args.push("-name", input.pattern)
   // rtk find doesn't expose a --max; rely on its default cap (200).
@@ -76,9 +94,10 @@ function buildRtkFindArgs(input: FindInput): string[] {
 }
 
 // Build `rtk ls` args from a pi ls input.
-function buildRtkLsArgs(input: LsInput): string[] {
+function buildRtkLsArgs(input: LsInput, cwd: string): string[] {
   const args: string[] = ["ls", "-la"]
-  if (input.path) args.push(input.path)
+  const p = resolveInputPath(input.path, cwd)
+  if (p) args.push(p)
   return args
 }
 
@@ -89,7 +108,7 @@ function buildRtkLsArgs(input: LsInput): string[] {
 // Uses `-l aggressive` (signatures only, function bodies → `// ...`): for full-file
 // reads this yields ~71% byte reduction on code files (rtk read default `none`
 // filters nothing). Edit anchors are safe because offset reads are skipped above.
-function buildRtkReadArgs(input: ReadInput): string[] | null {
+function buildRtkReadArgs(input: ReadInput, cwd: string): string[] | null {
   // offset = targeted read (edit anchors, line-range inspection); rtk read's
   // filtering would shift line numbers and drop anchors — skip.
   if (typeof input.offset === "number" && input.offset > 0) return null
@@ -98,7 +117,7 @@ function buildRtkReadArgs(input: ReadInput): string[] | null {
   if (typeof input.limit === "number" && input.limit > 0) {
     args.push("-m", String(input.limit))
   }
-  args.push(input.path)
+  args.push(resolveInputPath(input.path, cwd)!)
   return args
 }
 
@@ -133,23 +152,23 @@ export default async function (pi: ExtensionAPI) {
       if (doGrep && name === "grep") {
         const input = event.input as GrepInput
         if (input && typeof input.pattern === "string" && input.pattern) {
-          rtkArgs = buildRtkRgArgs(input)
+          rtkArgs = buildRtkRgArgs(input, ctx.cwd)
         }
       } else if (doFind && name === "find") {
         const input = event.input as FindInput
         if (input && typeof input.pattern === "string" && input.pattern) {
-          rtkArgs = buildRtkFindArgs(input)
+          rtkArgs = buildRtkFindArgs(input, ctx.cwd)
         }
       } else if (doLs && name === "ls") {
         const input = event.input as LsInput
-        rtkArgs = buildRtkLsArgs(input)
+        rtkArgs = buildRtkLsArgs(input, ctx.cwd)
       } else if (doRead && name === "read") {
         const input = event.input as ReadInput
         // Skip image reads: pi returns ImageContent for images, rtk read is text-only.
         const hasImage = Array.isArray(event.content) &&
           event.content.some((b: unknown) => (b as { type?: string })?.type === "image")
         if (hasImage) return
-        rtkArgs = buildRtkReadArgs(input)
+        rtkArgs = buildRtkReadArgs(input, ctx.cwd)
       }
 
       if (!rtkArgs) return
@@ -157,6 +176,7 @@ export default async function (pi: ExtensionAPI) {
       const result = await pi.exec("rtk", rtkArgs, {
         timeout: SEARCH_TIMEOUT_MS,
         signal: ctx.signal,
+        cwd: ctx.cwd,
       })
 
       // Fail open: if rtk errors, keep the native tool result.

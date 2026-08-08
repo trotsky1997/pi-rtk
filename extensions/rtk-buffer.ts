@@ -79,9 +79,27 @@ export default function (pi: ExtensionAPI) {
   // Detect a read/cat/type/Get-Content of a buffer file inside a shell
   // command. Returns the matched buffer path, or null. Quote- and case-aware;
   // we only need a boolean, but returning the path aids the reason string.
+  //
+  // Only blocks full-dump readers (cat/head/tail/type/Get-Content/less/more/bat)
+  // — search commands (rg/grep/find/awk/sed/findstr/Select-String) are ALLOWED
+  // to read buffer files, since that's the encouraged re-retrieval path.
   function bufferFileInCommand(cmd: string): string | null {
-    // Match rtk-out-<digits>-<alnum>.txt possibly with a path prefix and
-    // surrounding quotes. We look for the filename token directly.
+    // Strip leading env assignments (FOO=1 BAR=2 cmd -> cmd) so the first token
+    // reflects the actual command. Mirrors splitLeadingEnvAssignments in rtk.ts.
+    const envPattern = /^((?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s]+)\s+)*)/
+    const stripped = cmd.replace(envPattern, "").trimStart()
+    // Take the first token (before any pipe) to identify the command.
+    const firstToken = stripped.split(/[\s|]/)[0].replace(/^["']/, "").replace(/["']$/, "")
+    const lower = firstToken.toLowerCase()
+
+    // Search/read commands — ALLOWED to access buffer files (encouraged).
+    const searchCmds = new Set([
+      "rg", "grep", "egrep", "fgrep", "find", "awk", "sed", "perl",
+      "findstr", "select-string", "sls",  // powershell search
+    ])
+    if (searchCmds.has(lower)) return null
+
+    // Full-dump readers — BLOCK if they reference a buffer file.
     const re = /([\w\/.\\-]*rtk-out-\d+-[A-Za-z0-9]+\.txt)/g
     let m: RegExpExecArray | null
     while ((m = re.exec(cmd)) !== null) {

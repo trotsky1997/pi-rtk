@@ -88,16 +88,21 @@ export default function (pi: ExtensionAPI) {
     // reflects the actual command. Mirrors splitLeadingEnvAssignments in rtk.ts.
     const envPattern = /^((?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s]+)\s+)*)/
     const stripped = cmd.replace(envPattern, "").trimStart()
-    // Take the first token (before any pipe) to identify the command.
-    const firstToken = stripped.split(/[\s|]/)[0].replace(/^["']/, "").replace(/["']$/, "")
-    const lower = firstToken.toLowerCase()
+    // Tokens before any pipe, to identify the command (handles `rtk rg` prefix).
+    const tokens = stripped.split(/[\s|]/).filter(Boolean)
+    const first = (tokens[0] ?? "").replace(/^["']/, "").replace(/["']$/, "")
+    const second = (tokens[1] ?? "").replace(/^["']/, "").replace(/["']$/, "")
+    // rtk.ts rewrites `rg`/`grep` -> `rtk rg`/`rtk grep`, so the first token becomes
+    // `rtk` — unwrap it to check the real subcommand.
+    const lower = first.toLowerCase()
+    const sub = (lower === "rtk" ? second.toLowerCase() : "")
 
     // Search/read commands — ALLOWED to access buffer files (encouraged).
     const searchCmds = new Set([
       "rg", "grep", "egrep", "fgrep", "find", "awk", "sed", "perl",
       "findstr", "select-string", "sls",  // powershell search
     ])
-    if (searchCmds.has(lower)) return null
+    if (searchCmds.has(lower) || searchCmds.has(sub)) return null
 
     // Full-dump readers — BLOCK if they reference a buffer file.
     const re = /([\w\/.\\-]*rtk-out-\d+-[A-Za-z0-9]+\.txt)/g

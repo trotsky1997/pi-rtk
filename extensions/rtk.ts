@@ -67,8 +67,9 @@ export default async function (pi: ExtensionAPI) {
       const cmd = (event.input as { command?: unknown }).command
       if (typeof cmd !== "string" || cmd.trim() === "") return
 
-      // Skip commands already routed through rtk.
-      if (cmd.startsWith("rtk ")) return
+      // Skip if rtk already appears anywhere as a token (handles multi-line, &&, ;, |
+      // etc.) so e.g. `git status && rtk pytest` is left alone.
+      if (/\brtk\b/.test(cmd)) return
       if (process.env.RTK_DISABLED === "1") return
 
       // Delegate to RTK.

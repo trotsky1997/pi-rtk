@@ -40,6 +40,7 @@ const NO_BUFFER = new Set([
   "ocr", // image layout — already compacted
   "computer_use", "browser_use", // handled by TK filter layer
   "tk", // TK is itself a filter, double-buffering is noise
+  "web_fetch", // already truncates via max_length; buffering spills it to a temp file then blocks read/cat, which prevents the agent from reading fetched docs (e.g. SKILL.md) in full
 ])
 
 // Buffer files live in tmpdir and match `rtk-out-<stamp>-<rand>.txt`.

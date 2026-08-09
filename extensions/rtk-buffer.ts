@@ -77,6 +77,21 @@ function describeInput(toolName: string, input: Record<string, unknown>): string
   return toolName
 }
 
+// True if this tool_result is skill content: a web_fetch of a SKILL.md URL,
+// or a read of a path under a skills/ directory. Skill docs are loaded to be
+// understood in full, so they are exempt from buffering (see tool_result).
+function isSkillContent(event: { input?: Record<string, unknown> }): boolean {
+  const input = (event.input ?? {}) as Record<string, unknown>
+  // web_fetch exposes the fetched URL in event.input.url.
+  const url = input.url
+  if (typeof url === "string" && /\/skills\/|SKILL\.md/i.test(url)) return true
+  // read exposes the path in event.input.path; also cover a fetched skill
+  // saved to disk (e.g. .../skills/<name>/SKILL.md).
+  const path = input.path
+  if (typeof path === "string" && /\/skills\/|SKILL\.md/i.test(path)) return true
+  return false
+}
+
 export default function (pi: ExtensionAPI) {
   if (process.env.RTK_BUFFER_DISABLED === "1") return
 
@@ -186,6 +201,13 @@ export default function (pi: ExtensionAPI) {
       appendFileSync(join(tmpdir(), "rtk-ver.log"), `[buffer v2] name=${name} ts=${Date.now()}\n`)
       if (noBuffer.has(name)) return
       if (event.isError) return
+
+      // Skill content (fetched SKILL.md or read of a skills/ path) is loaded
+      // to be understood in full — buffering it to a temp file + the
+      // read-only-via-search guard would prevent the agent from reading the
+      // skill document into context. Skip buffering so it stays inline.
+      // (web_fetch's own max_length still bounds the size.)
+      if (isSkillContent(event)) return
 
       // Skip image-only reads (no text to buffer).
       const hasImage = Array.isArray(event.content) &&
